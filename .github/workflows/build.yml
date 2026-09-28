@@ -31,7 +31,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.source_ref }}
@@ -57,6 +57,7 @@ jobs:
       REPO_NAME: 'AyuGramDesktop-Plus'
       PREPARE_PATH: 'Telegram/build/prepare/prepare.py'
       MAC_LIBRARIES_CACHE_VERSION: 'v4'
+      CCACHE_MAXSIZE: 4G
       CCACHE_DIR: ${{ github.workspace }}/.ayugram-ccache
       HOMEBREW_NO_AUTO_UPDATE: '1'
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -120,7 +121,6 @@ jobs:
             brew install "${formulae[@]}"
           fi
           command -v ccache >/dev/null || brew install ccache
-          ccache --max-size=4G
 
           # Spotlight indexing only slows the dependency build down.
           sudo mdutil -a -i off
@@ -136,6 +136,15 @@ jobs:
               > "$RUNNER_TEMP/ccache-bin/$compiler"
             chmod +x "$RUNNER_TEMP/ccache-bin/$compiler"
           done
+
+      - name: Check out cache maintenance scripts.
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: .builder-ci
+          sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Restore libraries cache.
         id: cache-libs
@@ -153,7 +162,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.OS }}-ccache-v1-${{ matrix.arch }}-${{ inputs.source_sha }}
+          key: ${{ runner.OS }}-ccache-v1-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: ${{ runner.OS }}-ccache-v1-${{ matrix.arch }}-
 
       - name: Build dependencies.
@@ -167,24 +176,29 @@ jobs:
 
       - name: Free up disk space.
         id: trim-dependencies
-        if: >-
-          steps.cache-libs.outputs.cache-hit != 'true'
-            && steps.cache-libs.outputs.cache-matched-key == ''
         run: |
           set -euo pipefail
           ./$REPO_NAME/scripts/trim_macos_libraries.sh Libraries
 
-      # 瘦身后立即入库，后续构建失败不再连带丢失依赖缓存
+      # 裁剪完成后先清理本架构旧缓存，再保存依赖。
+      - name: Prepare libraries cache update.
+        id: prepare-libs
+        if: steps.build-dependencies.outcome == 'success' && steps.trim-dependencies.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_PREFIX: ${{ runner.OS }}-libs-${{ env.MAC_LIBRARIES_CACHE_VERSION }}-${{ matrix.arch }}-
+          CURRENT_KEY: ${{ steps.cache-libs.outputs.cache-primary-key }}
+        run: |
+          python3 .builder-ci/.github/scripts/prepare_cache_save.py \
+            --prefix "$CACHE_PREFIX" --key "$CURRENT_KEY" \
+            Libraries
+
       - name: Save libraries cache.
-        if: >-
-          steps.build-dependencies.outcome == 'success'
-            && (steps.trim-dependencies.outcome == 'success'
-              || steps.cache-libs.outputs.cache-matched-key != '')
-            && steps.cache-libs.outputs.cache-hit != 'true'
+        if: steps.prepare-libs.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
-          path: |
-            Libraries
+          path: Libraries
           key: ${{ steps.cache-libs.outputs.cache-primary-key }}
 
       # Packer 是 Telegram 的构建依赖，私钥头文件必须在编译前就位
@@ -254,8 +268,23 @@ jobs:
         if: always()
         run: ccache --show-stats || true
 
+      - name: Enforce compiler cache budget.
+        run: ccache --cleanup
+
+      - name: Prepare compiler cache update.
+        id: prepare-ccache
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_PREFIX: ${{ runner.OS }}-ccache-v1-${{ matrix.arch }}-
+          CURRENT_KEY: ${{ steps.cache-ccache.outputs.cache-primary-key }}
+        run: |
+          python3 .builder-ci/.github/scripts/prepare_cache_save.py \
+            --prefix "$CACHE_PREFIX" --key "$CURRENT_KEY" \
+            "$CCACHE_DIR"
+
       - name: Save ccache.
-        if: success() && steps.cache-ccache.outputs.cache-hit != 'true'
+        if: steps.prepare-ccache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CCACHE_DIR }}

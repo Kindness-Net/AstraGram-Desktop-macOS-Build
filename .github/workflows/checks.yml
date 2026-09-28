@@ -19,6 +19,9 @@ jobs:
       - name: Check out repository.
         uses: actions/checkout@v7
 
+      - name: Test cache update guards.
+        run: python3 -m unittest discover -s .github/tests -v
+
       - name: Run actionlint.
         env:
           ACTIONLINT_VERSION: 1.7.12
