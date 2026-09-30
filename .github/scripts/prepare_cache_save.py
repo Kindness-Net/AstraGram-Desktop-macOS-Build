@@ -12,7 +12,7 @@ def github_api(endpoint, *, paginate=False, method="GET"):
     command = ["gh", "api", "--method", method, endpoint]
     if paginate:
         command += ["--paginate", "--slurp"]
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         # Concurrent eviction can remove a cache between listing and deletion.
         if method == "DELETE" and "HTTP 404" in result.stderr:

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -21,6 +22,22 @@ def cache(identifier, key="old", ref=REF, created="2026-09-27T04:00:00.123Z", pr
 
 
 class CacheSaveTests(unittest.TestCase):
+    def test_github_api_reads_utf8_with_windows_default_encoding(self):
+        response = {"head_commit": {"message": "build: 对齐仓库地址与构建产物名称"}}
+        payload = json.dumps(response, ensure_ascii=False).encode("utf-8")
+        real_run = cache_save.subprocess.run
+
+        def run_fake_gh(command, **kwargs):
+            # Model Windows' default codec while exercising real pipe decoding.
+            kwargs.setdefault("encoding", "cp1252")
+            return real_run([
+                sys.executable, "-c",
+                "import sys; sys.stdout.buffer.write(" + repr(payload) + ")",
+            ], **kwargs)
+
+        with patch.object(cache_save.subprocess, "run", side_effect=run_fake_gh):
+            self.assertEqual(cache_save.github_api("endpoint"), response)
+
     def select(self, items):
         return cache_save.select_stale(
             items, prefix=PREFIX, key=PREFIX + "current", ref=REF, started_at=STARTED
