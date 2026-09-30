@@ -68,7 +68,7 @@ jobs:
       - name: Check out repository.
         uses: actions/checkout@v7
         with:
-          repository: Kindness-Kismet/AyuGramDesktop-Plus
+          repository: Kindness-Kismet/AstraGram-Desktop
           ref: ${{ inputs.source_sha }}
           submodules: recursive
           fetch-depth: 1
@@ -88,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/build_provenance.py validate-source \
-            --repository Kindness-Kismet/AyuGramDesktop-Plus \
+            --repository Kindness-Kismet/AstraGram-Desktop \
             --sha "$SOURCE_SHA" \
             --ref "$SOURCE_REF" \
             --run-id "$SOURCE_RUN_ID" \
@@ -210,7 +210,7 @@ jobs:
           test -n "$PACKER_PRIVATE_H"
           printf '%s' "$PACKER_PRIVATE_H" > $REPO_NAME/Telegram/SourceFiles/_other/packer_private.h
 
-      - name: Build AyuGram Desktop.
+      - name: Build AstraGram Desktop.
         run: |
           set -euo pipefail
           cd $REPO_NAME/Telegram
@@ -240,10 +240,10 @@ jobs:
         run: |
           set -euo pipefail
           cd "$REPO_NAME/out/Release"
-          test -d AyuGram.app
+          test -d AstraGram.app
           test -x Packer
 
-          test "$(lipo -archs AyuGram.app/Contents/MacOS/AyuGram)" = "${{ matrix.cmake_arch }}"
+          test "$(lipo -archs AstraGram.app/Contents/MacOS/AstraGram)" = "${{ matrix.cmake_arch }}"
           test "$(lipo -archs Packer)" = "${{ matrix.cmake_arch }}"
           test ! -f Updater || test "$(lipo -archs Updater)" = "${{ matrix.cmake_arch }}"
 
@@ -252,12 +252,12 @@ jobs:
         run: |
           set -euo pipefail
           cd $REPO_NAME/out/Release
-          bin=AyuGram.app/Contents/MacOS/AyuGram
+          bin=AstraGram.app/Contents/MacOS/AstraGram
           before=$(stat -f %z "$bin")
           strip -x -S "$bin"
           after=$(stat -f %z "$bin")
           echo "binary: $before -> $after bytes"
-          size=$(du -sk AyuGram.app | cut -f1)
+          size=$(du -sk AstraGram.app | cut -f1)
           echo "bundle: $((size * 1024)) bytes"
           if test "$((size * 1024))" -ge 1073741824; then
             echo "bundle still above the 1 GiB limit of the update format"
@@ -296,8 +296,8 @@ jobs:
           version=$(sed -n 's/^AppVersionStrSmall //p' $REPO_NAME/Telegram/build/version)
           test -n "$version"
           cd $REPO_NAME/out/Release
-          zip -r "AyuGram-v${version}-macos-${{ matrix.arch }}.zip" AyuGram.app
-          test ! -f Updater || zip "AyuGram-v${version}-macos-${{ matrix.arch }}.zip" Updater
+          zip -r "AstraGram-v${version}-macos-${{ matrix.arch }}.zip" AstraGram.app
+          test ! -f Updater || zip "AstraGram-v${version}-macos-${{ matrix.arch }}.zip" Updater
 
       # 每个架构只生成自己的更新包，避免把两个架构塞进同一份 Universal 包。
       - name: Pack update.
@@ -306,7 +306,7 @@ jobs:
           version=$(sed -n 's/^AppUpdateVersion  *//p' $REPO_NAME/Telegram/build/version)
           test -n "$version"
           cd $REPO_NAME/out/Release
-          ./Packer -version "$version" -arch ${{ matrix.cmake_arch }} -path AyuGram.app
+          ./Packer -version "$version" -arch ${{ matrix.cmake_arch }} -path AstraGram.app
           test -s "${{ matrix.updater }}${version}"
 
       - name: Write artifact provenance.
@@ -320,12 +320,12 @@ jobs:
         run: |
           set -euo pipefail
           release="$REPO_NAME/out/Release"
-          archive="$release/AyuGram-v${VERSION}-macos-${{ matrix.arch }}.zip"
+          archive="$release/AstraGram-v${VERSION}-macos-${{ matrix.arch }}.zip"
           update="$release/${{ matrix.updater }}${APP_UPDATE_VERSION}"
           python3 "$REPO_NAME/scripts/build_provenance.py" write-artifact-manifest \
             --platform macos \
             --arch "${{ matrix.arch }}" \
-            --source-repository Kindness-Kismet/AyuGramDesktop-Plus \
+            --source-repository Kindness-Kismet/AstraGram-Desktop \
             --source-ref "$SOURCE_REF" \
             --source-sha "$SOURCE_SHA" \
             --source-run-id "$SOURCE_RUN_ID" \
@@ -342,9 +342,9 @@ jobs:
       - name: Upload architecture artifact.
         uses: actions/upload-artifact@v7
         with:
-          name: AyuGram-macOS-${{ matrix.arch }}
+          name: AstraGram-macOS-${{ matrix.arch }}
           path: |
-            ${{ env.REPO_NAME }}/out/Release/AyuGram-v*-macos-${{ matrix.arch }}.zip
+            ${{ env.REPO_NAME }}/out/Release/AstraGram-v*-macos-${{ matrix.arch }}.zip
             ${{ env.REPO_NAME }}/out/Release/${{ matrix.updater }}*
             ${{ env.REPO_NAME }}/out/Release/provenance-macos-${{ matrix.arch }}.json
           if-no-files-found: error
