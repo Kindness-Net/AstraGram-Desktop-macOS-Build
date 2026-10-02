@@ -169,10 +169,15 @@ jobs:
         id: build-dependencies
         run: |
           set -euo pipefail
+          ccache --zero-stats
           # 正式版不传 skip-release，依赖按 Release 配置编译
           export PATH="$RUNNER_TEMP/ccache-bin:$PATH"
           export CCACHE_SLOPPINESS=pch_defines,time_macros
           ./$REPO_NAME/Telegram/build/prepare/mac.sh silent
+
+      - name: Show dependency ccache stats.
+        if: always() && steps.build-dependencies.outcome != 'skipped'
+        run: ccache --show-stats --verbose || true
 
       - name: Free up disk space.
         id: trim-dependencies
@@ -211,8 +216,10 @@ jobs:
           printf '%s' "$PACKER_PRIVATE_H" > $REPO_NAME/Telegram/SourceFiles/_other/packer_private.h
 
       - name: Build AstraGram Desktop.
+        id: build-app
         run: |
           set -euo pipefail
+          ccache --zero-stats
           cd $REPO_NAME/Telegram
 
           # Xcode generator 会忽略 CMAKE_*_COMPILER_LAUNCHER，必须经 Xcode attribute 注入 wrapper。
@@ -220,10 +227,13 @@ jobs:
           # clang 回退读取 xcodebuild 脚本阶段导出的多个 *_DEPLOYMENT_TARGET 环境变量并报冲突。
           # 该命令是 CMake 生成物无法注入标志，直接关闭 predefs 生成。
           export CCACHE_SLOPPINESS=pch_defines,time_macros
+          # Clang PCH 必须关闭时间戳校验，才能让 ccache 复用使用 PCH 的编译结果。
           ./configure.sh \
             -D CMAKE_CONFIGURATION_TYPES=Release \
             -D CMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} \
             -D CMAKE_AUTOMOC_COMPILER_PREDEFINES=OFF \
+            -D 'CMAKE_CXX_FLAGS=-Xclang -fno-pch-timestamp' \
+            -D 'CMAKE_OBJCXX_FLAGS=-Xclang -fno-pch-timestamp' \
             -D "CMAKE_XCODE_ATTRIBUTE_CC=$RUNNER_TEMP/ccache-bin/clang" \
             -D "CMAKE_XCODE_ATTRIBUTE_CXX=$RUNNER_TEMP/ccache-bin/clang++" \
             -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
@@ -264,9 +274,9 @@ jobs:
             exit 1
           fi
 
-      - name: Show ccache stats.
-        if: always()
-        run: ccache --show-stats || true
+      - name: Show app ccache stats.
+        if: always() && steps.build-app.outcome != 'skipped'
+        run: ccache --show-stats --verbose || true
 
       - name: Enforce compiler cache budget.
         run: ccache --cleanup
