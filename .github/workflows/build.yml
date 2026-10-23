@@ -1,9 +1,14 @@
 name: MacOS
-run-name: "MacOS · source run #${{ inputs.source_run_id }}.${{ inputs.source_run_attempt }} · ${{ inputs.source_sha }}"
+run-name: "${{ inputs.build_only && 'MacOS · manual build' || format('MacOS · source run #{0}.{1}', inputs.source_run_id, inputs.source_run_attempt) }} · ${{ inputs.source_sha }}"
 
 on:
   workflow_dispatch:
     inputs:
+      build_only:
+        description: Build a main-branch commit without release provenance.
+        required: false
+        default: false
+        type: boolean
       source_sha:
         description: Exact source commit SHA.
         required: true
@@ -14,11 +19,11 @@ on:
         type: string
       source_run_id:
         description: Source Release workflow run ID.
-        required: true
+        required: false
         type: string
       source_run_attempt:
         description: Source Release workflow run attempt.
-        required: true
+        required: false
         type: string
       version:
         description: Display version from the source commit.
@@ -34,7 +39,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.source_ref }}
+  group: ${{ github.workflow }}-${{ inputs.source_ref }}-${{ inputs.build_only && 'build-only' || 'release' }}
   cancel-in-progress: true
 
 jobs:
@@ -76,6 +81,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate source request.
+        if: ${{ !inputs.build_only }}
         working-directory: ${{ env.REPO_NAME }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,6 +102,30 @@ jobs:
             --version "$VERSION" \
             --appupdateversion "$APP_UPDATE_VERSION" \
             --workflow-path .github/workflows/build-release.yml
+
+      - name: Validate standalone source.
+        if: ${{ inputs.build_only }}
+        shell: bash
+        working-directory: ${{ env.REPO_NAME }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          VERSION: ${{ inputs.version }}
+          APP_UPDATE_VERSION: ${{ inputs.appupdateversion }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTOR" = "KiritoXDone"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(awk '$1 == "AppVersionStrSmall" { print $2 }' Telegram/build/version)" = "$VERSION"
+          test "$(awk '$1 == "AppUpdateVersion" { print $2 }' Telegram/build/version)" = "$APP_UPDATE_VERSION"
+          status=$(gh api "repos/Kindness-Kismet/AstraGram-Desktop/compare/${SOURCE_SHA}...main" --jq '.status')
+          case "$status" in
+            identical|ahead) ;;
+            *) echo "Source SHA is not an ancestor of main: $status" >&2; exit 1 ;;
+          esac
 
       - name: Check packer cache guard.
         run: |
@@ -311,6 +341,7 @@ jobs:
 
       # 每个架构只生成自己的更新包，避免把两个架构塞进同一份 Universal 包。
       - name: Pack update.
+        if: ${{ !inputs.build_only }}
         run: |
           set -euo pipefail
           version=$(sed -n 's/^AppUpdateVersion  *//p' $REPO_NAME/Telegram/build/version)
@@ -320,6 +351,7 @@ jobs:
           test -s "${{ matrix.updater }}${version}"
 
       - name: Write artifact provenance.
+        if: ${{ !inputs.build_only }}
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           SOURCE_REF: ${{ inputs.source_ref }}
@@ -352,7 +384,7 @@ jobs:
       - name: Upload architecture artifact.
         uses: actions/upload-artifact@v7
         with:
-          name: AstraGram-macOS-${{ matrix.arch }}
+          name: ${{ inputs.build_only && format('Validation-{0}-AstraGram-macOS-{1}', inputs.source_sha, matrix.arch) || format('AstraGram-macOS-{0}', matrix.arch) }}
           path: |
             ${{ env.REPO_NAME }}/out/Release/AstraGram-v*-macos-${{ matrix.arch }}.zip
             ${{ env.REPO_NAME }}/out/Release/${{ matrix.updater }}*
