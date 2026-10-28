@@ -1,0 +1,109 @@
+name: Repackage macOS updates
+run-name: "macOS update packages · ${{ inputs.version }} · ${{ inputs.source_sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Source main commit used by the successful standalone build.
+        required: true
+        type: string
+      build_run_id:
+        description: Successful standalone macOS build run containing the published ZIPs.
+        required: true
+        type: string
+      version:
+        description: Existing stable release version, without v.
+        required: true
+        type: string
+      appupdateversion:
+        description: Update version from the source commit.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: macos-repack-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  repack:
+    if: github.actor == 'KiritoXDone' && github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      VERSION: ${{ inputs.version }}
+      UPDATE_VERSION: ${{ inputs.appupdateversion }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - name: Check out packaging workflow.
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out exact Packer source.
+        uses: actions/checkout@v7
+        with:
+          repository: Kindness-Kismet/AstraGram-Desktop
+          ref: ${{ inputs.source_sha }}
+          path: source
+          persist-credentials: false
+
+      - name: Validate source and published archives.
+        run: python3 .github/scripts/validate_repack.py
+
+      - name: Install Packer dependencies.
+        run: brew install qtbase openssl@3 xz
+
+      - name: Build the signing tool.
+        env:
+          PACKER_PRIVATE_H: ${{ secrets.PACKER_PRIVATE_H }}
+        run: |
+          set -euo pipefail
+          test -n "$PACKER_PRIVATE_H"
+          key=source/Telegram/SourceFiles/_other/packer_private.h
+          trap 'rm -f "$key"' EXIT
+          umask 077
+          printf '%s' "$PACKER_PRIVATE_H" > "$key"
+          cmake -S .github/packer -B packer-build \
+            -D SOURCE_ROOT="$GITHUB_WORKSPACE/source" \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D CMAKE_PREFIX_PATH="$(brew --prefix qtbase);$(brew --prefix xz)" \
+            -D OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake --build packer-build --parallel 2
+
+      - name: Package and verify both updates.
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do
+            directory="$GITHUB_WORKSPACE/archives/$arch"
+            unzip -q "$directory/AstraGram-v$VERSION-macos-$arch.zip" -d "$directory/unpacked"
+            if test "$arch" = x64; then cpu=x86_64; prefix=tmacupd; else cpu=arm64; prefix=tarmacupd; fi
+            test "$(lipo -archs "$directory/unpacked/AstraGram.app/Contents/MacOS/AstraGram")" = "$cpu"
+            (
+              cd "$directory/unpacked"
+              "$GITHUB_WORKSPACE/packer-build/Packer" -version "$UPDATE_VERSION" -arch "$cpu" -path AstraGram.app
+              test -s "$prefix$UPDATE_VERSION"
+              mv "$prefix$UPDATE_VERSION" "$GITHUB_WORKSPACE/output/"
+            )
+          done
+          (cd output && shasum -a 256 tmacupd* tarmacupd* > SHA256SUMS)
+
+      - name: Upload signed update packages.
+        uses: actions/upload-artifact@v7
+        with:
+          name: MacOS-update-packages-${{ inputs.version }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove signing material.
+        if: always()
+        run: rm -rf packer-build source/Telegram/SourceFiles/_other/packer_private.h
