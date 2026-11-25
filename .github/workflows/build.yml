@@ -282,8 +282,10 @@ jobs:
           cd "$REPO_NAME/out/Release"
           test -d AstraGram.app
           test -x Packer
+          test -x AstraGram.app/Contents/Helpers/TelegramWidgetHelper
 
           test "$(lipo -archs AstraGram.app/Contents/MacOS/AstraGram)" = "${{ matrix.cmake_arch }}"
+          test "$(lipo -archs AstraGram.app/Contents/Helpers/TelegramWidgetHelper)" = "${{ matrix.cmake_arch }}"
           test "$(lipo -archs Packer)" = "${{ matrix.cmake_arch }}"
           test ! -f Updater || test "$(lipo -archs Updater)" = "${{ matrix.cmake_arch }}"
 
