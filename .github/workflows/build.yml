@@ -53,10 +53,10 @@ jobs:
         include:
           - arch: x64
             cmake_arch: x86_64
-            updater: tmacupd
+            updater: td-update-mac-x64-
           - arch: arm64
             cmake_arch: arm64
-            updater: tarmacupd
+            updater: td-update-mac-arm-
 
     env:
       REPO_NAME: 'AyuGramDesktop-Plus'
@@ -126,11 +126,6 @@ jobs:
             identical|ahead) ;;
             *) echo "Source SHA is not an ancestor of main: $status" >&2; exit 1 ;;
           esac
-
-      - name: Check packer cache guard.
-        run: |
-          set -euo pipefail
-          python3 -c "from pathlib import Path; assert b'ccache:disable' in Path('$REPO_NAME/Telegram/SourceFiles/_other/packer.cpp').read_bytes()[:4096]"
 
       - name: First set up.
         timeout-minutes: 15
@@ -236,15 +231,6 @@ jobs:
           path: Libraries
           key: ${{ steps.cache-libs.outputs.cache-primary-key }}
 
-      # Packer 是 Telegram 的构建依赖，私钥头文件必须在编译前就位
-      - name: Write packer signing key.
-        env:
-          PACKER_PRIVATE_H: ${{ secrets.PACKER_PRIVATE_H }}
-        run: |
-          set -euo pipefail
-          test -n "$PACKER_PRIVATE_H"
-          printf '%s' "$PACKER_PRIVATE_H" > $REPO_NAME/Telegram/SourceFiles/_other/packer_private.h
-
       - name: Build AstraGram Desktop.
         id: build-app
         run: |
@@ -341,16 +327,21 @@ jobs:
           zip -r "AstraGram-v${version}-macos-${{ matrix.arch }}.zip" AstraGram.app
           test ! -f Updater || zip "AstraGram-v${version}-macos-${{ matrix.arch }}.zip" Updater
 
-      # 每个架构只生成自己的更新包，避免把两个架构塞进同一份 Universal 包。
+      # 每个架构使用自己的原生 Packer 和已检查架构的应用包。
       - name: Pack update.
+        id: update
         if: ${{ !inputs.build_only }}
+        working-directory: ${{ env.REPO_NAME }}
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^AppUpdateVersion  *//p' $REPO_NAME/Telegram/build/version)
-          test -n "$version"
-          cd $REPO_NAME/out/Release
-          ./Packer -version "$version" -arch ${{ matrix.cmake_arch }} -path AstraGram.app
-          test -s "${{ matrix.updater }}${version}"
+          update=$(python3 scripts/package_update.py \
+            --packer out/Release/Packer \
+            --platform macos --arch "${{ matrix.arch }}" \
+            --input-dir out/Release --output-dir out/Release \
+            --path AstraGram.app)
+          echo "path=$REPO_NAME/$update" >> "$GITHUB_OUTPUT"
 
       - name: Write artifact provenance.
         if: ${{ !inputs.build_only }}
@@ -361,11 +352,11 @@ jobs:
           SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
           VERSION: ${{ inputs.version }}
           APP_UPDATE_VERSION: ${{ inputs.appupdateversion }}
+          UPDATE_PACKAGE: ${{ steps.update.outputs.path }}
         run: |
           set -euo pipefail
           release="$REPO_NAME/out/Release"
           archive="$release/AstraGram-v${VERSION}-macos-${{ matrix.arch }}.zip"
-          update="$release/${{ matrix.updater }}${APP_UPDATE_VERSION}"
           python3 "$REPO_NAME/.github/scripts/build_provenance.py" write-artifact-manifest \
             --platform macos \
             --arch "${{ matrix.arch }}" \
@@ -381,7 +372,7 @@ jobs:
             --appupdateversion "$APP_UPDATE_VERSION" \
             --output "$release/provenance-macos-${{ matrix.arch }}.json" \
             --file "$archive" \
-            --file "$update"
+            --file "$UPDATE_PACKAGE"
 
       - name: Upload architecture artifact.
         uses: actions/upload-artifact@v7
@@ -393,7 +384,3 @@ jobs:
             ${{ env.REPO_NAME }}/out/Release/provenance-macos-${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 7
-
-      - name: Remove packer signing key.
-        if: always()
-        run: rm -f "$REPO_NAME/Telegram/SourceFiles/_other/packer_private.h"
