@@ -318,6 +318,17 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.cache-ccache.outputs.cache-primary-key }}
 
+      - name: Ad-hoc sign application bundle.
+        run: |
+          set -euo pipefail
+          python3 "$REPO_NAME/Telegram/build/sign_mac.py" \
+            --identity - \
+            --entitlements "$REPO_NAME/Telegram/Telegram/Telegram.entitlements" \
+            "$REPO_NAME/out/Release/AstraGram.app"
+          test ! -f "$REPO_NAME/out/Release/Updater" \
+            || codesign --force --sign - "$REPO_NAME/out/Release/Updater"
+          codesign --verify --deep --strict --verbose=2 "$REPO_NAME/out/Release/AstraGram.app"
+
       - name: Package release output.
         run: |
           set -euo pipefail
